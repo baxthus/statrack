@@ -2,10 +2,7 @@ use futures_util::Stream;
 use redis::{AsyncTypedCommands, aio::ConnectionManager};
 use thiserror::Error;
 
-use crate::{
-    config::AppConfig,
-    discord::types::{Presence, User},
-};
+use crate::discord::types::{Presence, User};
 
 #[derive(Debug, Error)]
 pub enum StorageError {

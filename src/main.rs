@@ -16,17 +16,20 @@ mod storage;
 async fn main() {
     setup_logging();
 
-    let Ok(config) =
-        AppConfig::new().inspect_err(|err| error!(error = %err, "failed to load configuration"))
-    else {
-        return;
+    let config = match AppConfig::new() {
+        Ok(config) => config,
+        Err(err) => {
+            error!(error = %err, "failed to load configuration");
+            return;
+        }
     };
 
-    let Ok(storage) = Storage::connect(config.redis_url.clone())
-        .await
-        .inspect_err(|err| error!(error = %err, "failed to connect to redis"))
-    else {
-        return;
+    let storage = match Storage::connect(config.redis_url.clone()).await {
+        Ok(storage) => storage,
+        Err(err) => {
+            error!(error = %err, "failed to connect to redis");
+            return;
+        }
     };
 
     let token = CancellationToken::new();

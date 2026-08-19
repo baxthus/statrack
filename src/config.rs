@@ -13,9 +13,19 @@ pub(crate) enum ConfigError {
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
+pub(crate) struct DiscordConfig {
+    #[garde(length(min = 1))]
+    pub bot_token: String,
+    #[garde(skip)]
+    pub guild_id: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub(crate) struct AppConfig {
     #[garde(url)]
     pub redis_url: String,
+    #[garde(dive)]
+    pub discord: DiscordConfig,
 }
 
 impl AppConfig {

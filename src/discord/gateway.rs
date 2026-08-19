@@ -7,7 +7,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::{config::AppConfig, discord::client::Client, storage::Storage};
+use crate::{
+    config::AppConfig,
+    discord::client::{Client, ClientAction},
+    storage::Storage,
+};
 
 const SOCKET_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 
@@ -17,6 +21,8 @@ pub enum GatewayError {
     Dial(#[from] tokio_tungstenite::tungstenite::Error),
     #[error("read: {0}")]
     Read(tokio_tungstenite::tungstenite::Error),
+    #[error("write: {0}")]
+    Write(tokio_tungstenite::tungstenite::Error),
 }
 
 struct Backoff {
@@ -87,32 +93,57 @@ impl Gateway {
     async fn connect_and_run(&self, token: &CancellationToken) -> Result<(), GatewayError> {
         use futures_util::StreamExt;
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(SOCKET_URL).await?;
+        let (ws_stream, _) = select! {
+            _ = token.cancelled() => return Ok(()),
+            result = tokio_tungstenite::connect_async(SOCKET_URL) => result?,
+        };
         info!("connected to gateway");
 
+        let connection_token = token.child_token();
         let (mut write, mut read) = ws_stream.split();
 
         let (tx, mut rx) = mpsc::channel::<Message>(32);
-        let writer = tokio::spawn(async move {
+        let mut writer = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                if let Err(err) = write.send(msg).await {
-                    warn!(error = %err, "write failed, closing writer task");
-                    break;
-                }
+                write.send(msg).await?;
             }
+            Ok::<_, tokio_tungstenite::tungstenite::Error>(())
         });
 
-        let client = Client::new(self.config.clone(), self.storage.clone(), tx, token.clone());
+        let client = Client::new(
+            self.config.clone(),
+            self.storage.clone(),
+            tx,
+            connection_token.clone(),
+        );
 
         let result: Result<(), GatewayError> = loop {
             select! {
-                _ = token.cancelled() => {
-                    info!("shutting down connection");
+                _ = connection_token.cancelled() => {
+                    if token.is_cancelled() {
+                        info!("shutting down connection");
+                    } else {
+                        warn!("connection cancelled; reconnecting");
+                    }
                     break Ok(());
+                }
+                writer_result = &mut writer => {
+                    match writer_result {
+                        Ok(Ok(())) => break Ok(()),
+                        Ok(Err(err)) => break Err(GatewayError::Write(err)),
+                        Err(err) => {
+                            warn!(error = %err, "writer task failed");
+                            break Ok(());
+                        }
+                    }
                 }
                 msg = read.next() => {
                     match msg {
-                        Some(Ok(Message::Text(text))) => client.handle_message(text.as_bytes()).await,
+                        Some(Ok(Message::Text(text))) => {
+                            if client.handle_message(text.as_bytes()).await == ClientAction::Reconnect {
+                                break Ok(());
+                            }
+                        }
                         Some(Ok(_)) => {}, // handled internally
                         Some(Err(err)) => break Err(GatewayError::Read(err)),
                         None => break Ok(()), // stream closed
@@ -121,7 +152,8 @@ impl Gateway {
             }
         };
 
-        drop(client);
+        client.shutdown().await;
+        writer.abort();
         let _ = writer.await;
 
         result

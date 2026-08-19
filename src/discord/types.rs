@@ -8,6 +8,8 @@ pub enum Opcode {
     Heartbeat = 1,
     Identify = 2,
     PresenceUpdate = 3,
+    Reconnect = 7,
+    InvalidSession = 9,
     Hello = 10,
     HeartbeatAck = 11,
 }
