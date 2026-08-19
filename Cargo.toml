@@ -5,9 +5,14 @@ edition = "2024"
 
 [dependencies]
 config = { version = "0.15.25", default-features = false, features = ["yaml"] }
+futures-util = "0.3.34"
 garde = { version = "0.23.0", features = ["derive", "url"] }
+redis = { version = "1.6.0", features = ["connection-manager", "tokio-comp"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+serde_repr = "0.1.21"
 thiserror = "2.0.20"
 time = { version = "0.3.55", features = ["macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["local-time", "env-filter"] }

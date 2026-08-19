@@ -5,6 +5,8 @@ use tracing_subscriber::{EnvFilter, fmt::time::LocalTime};
 use crate::config::AppConfig;
 
 mod config;
+mod discord;
+mod storage;
 
 fn main() {
     setup_logging();
