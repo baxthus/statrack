@@ -1,25 +1,45 @@
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::fmt;
 use tracing_subscriber::{EnvFilter, fmt::time::LocalTime};
 
 use crate::config::AppConfig;
+use crate::discord::gateway::Gateway;
+use crate::storage::Storage;
 
 mod config;
 mod discord;
 mod storage;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     setup_logging();
 
-    let _config = match AppConfig::new() {
-        Ok(config) => config,
-        Err(err) => {
-            error!(error = %err, "failed to load configuration");
-            return;
-        }
+    let Ok(config) =
+        AppConfig::new().inspect_err(|err| error!(error = %err, "failed to load configuration"))
+    else {
+        return;
     };
 
-    info!("Hello, World!");
+    let Ok(storage) = Storage::connect(config.redis_url.clone())
+        .await
+        .inspect_err(|err| error!(error = %err, "failed to connect to redis"))
+    else {
+        return;
+    };
+
+    let token = CancellationToken::new();
+    {
+        let token = token.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            info!("shutting down");
+            token.cancel();
+        });
+    }
+
+    Gateway::new(config, storage).run(token).await;
 }
 
 fn setup_logging() {
@@ -42,4 +62,16 @@ fn setup_logging() {
         .with_target(false)
         .pretty()
         .init();
+}
+
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+
+    select! {
+        _ = ctrl_c => {},
+        _ = sigterm.recv() => {},
+    }
 }

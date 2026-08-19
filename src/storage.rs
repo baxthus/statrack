@@ -32,8 +32,8 @@ fn updates_channel(id: &str) -> String {
 }
 
 impl Storage {
-    pub async fn connect(config: &AppConfig) -> Result<Self, StorageError> {
-        let client = redis::Client::open(config.redis_url.as_str())?;
+    pub async fn connect(redis_url: String) -> Result<Self, StorageError> {
+        let client = redis::Client::open(redis_url)?;
         let conn = client.get_connection_manager().await?;
 
         redis::cmd("PING")
