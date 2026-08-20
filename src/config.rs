@@ -26,11 +26,19 @@ pub(crate) struct DiscordConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
+pub(crate) struct ApiConfig {
+    #[garde(skip)]
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub(crate) struct AppConfig {
     #[garde(url)]
     pub redis_url: String,
     #[garde(dive)]
     pub discord: DiscordConfig,
+    #[garde(dive)]
+    pub api: ApiConfig,
 }
 
 impl AppConfig {

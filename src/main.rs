@@ -8,6 +8,7 @@ use crate::config::AppConfig;
 use crate::discord::gateway::Gateway;
 use crate::storage::Storage;
 
+pub(crate) mod api;
 mod config;
 mod discord;
 mod storage;
@@ -42,7 +43,23 @@ async fn main() {
         });
     }
 
-    Gateway::new(config, storage).run(token).await;
+    let gateway = {
+        let token = token.clone();
+        let config = config.clone();
+        let storage = storage.clone();
+        tokio::spawn(async move {
+            Gateway::new(config, storage).run(token).await;
+        })
+    };
+
+    if let Err(err) = api::new(config, storage, token.clone()).await {
+        error!(error = %err, "failed to start api");
+    }
+
+    token.cancel();
+    if let Err(err) = gateway.await {
+        error!(error = %err, "gateway task failed");
+    }
 }
 
 fn setup_logging() {
