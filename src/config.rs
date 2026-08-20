@@ -1,8 +1,13 @@
+use std::sync::LazyLock;
+
 use config::{Config, Environment, File};
 use garde::Validate;
+use regex::Regex;
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::info;
+
+static NUMERIC_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+$").unwrap());
 
 #[derive(Debug, Error)]
 pub(crate) enum ConfigError {
@@ -16,8 +21,8 @@ pub(crate) enum ConfigError {
 pub(crate) struct DiscordConfig {
     #[garde(length(min = 1))]
     pub bot_token: String,
-    #[garde(skip)]
-    pub guild_id: u64,
+    #[garde(length(min = 1), pattern(*NUMERIC_REGEX))]
+    pub guild_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]

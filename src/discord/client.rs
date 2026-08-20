@@ -14,7 +14,11 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::{config::AppConfig, discord::types::Opcode, storage::Storage};
+use crate::{
+    config::AppConfig,
+    discord::types::{Opcode, Presence, User, event_type},
+    storage::Storage,
+};
 
 #[derive(Debug, Error)]
 pub(crate) enum ClientError {
@@ -24,6 +28,8 @@ pub(crate) enum ClientError {
     Send(#[from] tokio::sync::mpsc::error::SendError<WsMessage>),
     #[error("gateway protocol error: {0}")]
     Protocol(&'static str),
+    #[error("storage error: {0}")]
+    Storage(#[from] crate::storage::StorageError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +72,26 @@ struct IdentifyData {
     token: String,
     intents: u32,
     properties: IdentifyProperties,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadyData {
+    session_id: String,
+    user: User,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuildMember {
+    user: User,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuildCreateData {
+    id: String,
+    #[serde(default)]
+    members: Vec<GuildMember>,
+    #[serde(default)]
+    presences: Vec<Presence>,
 }
 
 #[derive(Clone)]
@@ -114,12 +140,23 @@ impl Client {
 
         let result = match (msg.op, msg.t.as_deref()) {
             (Opcode::Hello, _) => self.handle_hello(msg.d).await,
+
             (Opcode::Heartbeat, _) => self.send_heartbeat().await,
             (Opcode::HeartbeatAck, _) => {
+                info!("received heartbeat ack");
                 self.awaiting_heartbeat_ack.store(false, Ordering::Release);
                 Ok(())
             }
             (Opcode::Reconnect | Opcode::InvalidSession, _) => Ok(()),
+
+            (Opcode::Dispatch, Some(event_type::READY)) => self.handle_ready(msg.d).await,
+            (Opcode::Dispatch, Some(event_type::GUILD_CREATE)) => {
+                self.handle_guild_create(msg.d).await
+            }
+            (Opcode::Dispatch, Some(event_type::PRESENCE_UPDATE)) => {
+                self.handle_presence_update(msg.d).await
+            }
+
             _ => {
                 warn!(op = ?msg.op, t = ?msg.t, "received unhandled message");
                 return ClientAction::Continue;
@@ -127,8 +164,16 @@ impl Client {
         };
 
         if let Err(err) = result {
-            error!(error = %err, "failed to handle gateway message");
-            return ClientAction::Reconnect;
+            match err {
+                ClientError::Storage(err) => {
+                    error!(error = %err, "failed to persist gateway event");
+                    return ClientAction::Continue;
+                }
+                err => {
+                    error!(error = %err, "failed to handle gateway message");
+                    return ClientAction::Reconnect;
+                }
+            }
         }
 
         match msg.op {
@@ -229,6 +274,64 @@ impl Client {
         self.awaiting_heartbeat_ack.store(true, Ordering::Release);
         self.write_json(Opcode::Heartbeat, seq).await?;
         info!("sent heartbeat message");
+        Ok(())
+    }
+
+    async fn handle_ready(&self, data: Option<&RawValue>) -> Result<(), ClientError> {
+        info!("received ready event");
+
+        let data = data.ok_or(ClientError::Protocol("received ready event with no data"))?;
+        let ready = serde_json::from_str::<ReadyData>(data.get())?;
+
+        info!(session_id = %ready.session_id, user = format!("{}#{}", ready.user.username, ready.user.discriminator), "ready");
+        Ok(())
+    }
+
+    async fn handle_guild_create(&self, data: Option<&RawValue>) -> Result<(), ClientError> {
+        info!("received guild create event");
+
+        let data = data.ok_or(ClientError::Protocol(
+            "received guild create event with no data",
+        ))?;
+        let guild = serde_json::from_str::<GuildCreateData>(data.get())?;
+
+        if guild.id != self.config.discord.guild_id {
+            return Ok(());
+        }
+
+        let users = guild
+            .members
+            .into_iter()
+            .map(|m| m.user)
+            .collect::<Vec<User>>();
+
+        tokio::try_join!(
+            self.storage.set_users(&users),
+            self.storage.set_presences(&guild.presences),
+        )?;
+
+        Ok(())
+    }
+
+    async fn handle_presence_update(&self, data: Option<&RawValue>) -> Result<(), ClientError> {
+        info!("received presence update event");
+
+        let data = data.ok_or(ClientError::Protocol(
+            "received presence update event with no data",
+        ))?;
+        let presence = serde_json::from_str::<Presence>(data.get())?;
+
+        let guild_id = presence.guild_id.clone().ok_or(ClientError::Protocol(
+            "received presence update event with no guild id",
+        ))?;
+        if guild_id != self.config.discord.guild_id {
+            return Ok(());
+        }
+
+        let user_id = presence.user.id.clone();
+        self.storage.set_presence(&presence).await?;
+        self.storage.publish_update(&user_id).await?;
+
         Ok(())
     }
 }
