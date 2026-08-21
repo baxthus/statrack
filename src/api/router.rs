@@ -5,7 +5,11 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{api::middlewares, config::AppConfig, storage::Storage};
+use crate::{
+    api::{middlewares, routes},
+    config::AppConfig,
+    storage::Storage,
+};
 
 pub struct RouterState {
     pub storage: Storage,
@@ -19,7 +23,8 @@ pub async fn new(
     let shared_state = Arc::new(RouterState { storage });
 
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World" }))
+        .route("/health", get(routes::health))
+        .route("/user/{id}", get(routes::get_user))
         .layer(middleware::from_fn(middlewares::request_id))
         .with_state(shared_state);
 

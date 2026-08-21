@@ -305,10 +305,8 @@ impl Client {
             .map(|m| m.user)
             .collect::<Vec<User>>();
 
-        tokio::try_join!(
-            self.storage.set_users(&users),
-            self.storage.set_presences(&guild.presences),
-        )?;
+        self.storage.set_users(&users).await?;
+        self.storage.set_presences(&guild.presences).await?;
 
         Ok(())
     }
